@@ -1,128 +1,92 @@
-import expess from "express";
-import jwt from "jsonwebtoken";
+import express from "express";
+import fs from "fs";
+import multer from "multer";
+import cors from "cors";
+
 import mongoose from "mongoose";
-import bcrypt from "bcrypt";
-import { validationResult } from "express-validator";
-import registerValidator from "./validations/auth.js";
 
-import UserModal from "./models/user.js";
+import {
+  registerValidation,
+  loginValidation,
+  postCreateValidation,
+} from "./validations.js";
 
-import checkAuth from "./utils/checkAuth.js";
+import { handleValidationErrors, checkAuth } from "./utils/index.js";
+
+import { UserController, PostController } from "./controllers/index.js";
 
 mongoose
   .connect(
     "mongodb+srv://admin:wwwwww@cluster0.pfvqvx2.mongodb.net/blog?retryWrites=true&w=majority"
   )
-  .then(() => {
-    console.log("DB ok");
-  })
-  .catch((err) => console.log("Db Error", err));
+  .then(() => console.log("DB ok"))
+  .catch((err) => console.log("DB error", err));
 
-const app = expess();
-app.use(expess.json());
-app.get("/", (req, res) => {
-  res.send("23222 Hello WORLD!!!");
-});
+const app = express();
 
-app.post("/login", async (req, res) => {
-  try {
-    const user = await UserModal.findOne({ email: req.body.email });
-    if (!user)
-      return res.status(404).json({
-        message: "Пользователь не найден",
-      });
-    const isValidPass = await bcrypt.compare(
-      req.body.password,
-      user._doc.passwordHash
-    );
-    if (!isValidPass) {
-      return res.status(400).json({
-        message: "Неверный логин или пароль",
-      });
+const storage = multer.diskStorage({
+  destination: (_, __, cb) => {
+    if (!fs.existsSync("uploads")) {
+      fs.mkdirSync("uploads");
     }
-
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      "secret123",
-      { expiresIn: "10d" }
-    );
-    res.json({
-      ...user._doc,
-      token,
-      message: "авторизация ОК",
-    });
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      message: "Не удалось авторизоваться",
-    });
-  }
+    cb(null, "uploads");
+  },
+  filename: (_, file, cb) => {
+    cb(null, file.originalname);
+  },
 });
 
-app.post("/register", registerValidator, async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json(errors.array());
-    }
+const upload = multer({ storage });
 
-    const password = req.body.password;
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
+app.use(express.json());
+app.use(cors());
+app.use("/uploads", express.static("uploads"));
 
-    const doc = new UserModal({
-      email: req.body.email,
-      fullName: req.body.fullName,
-      avatarUrl: req.body.avatarUrl,
-      passwordHash,
-    });
+app.post(
+  "/auth/login",
+  loginValidation,
+  handleValidationErrors,
+  UserController.login
+);
+app.post(
+  "/auth/register",
+  registerValidation,
+  handleValidationErrors,
+  UserController.register
+);
+app.get("/auth/me", checkAuth, UserController.getMe);
 
-    const user = await doc.save();
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      "secret123",
-      { expiresIn: "10d" }
-    );
-
-    res.json({
-      ...user._doc,
-      token,
-    });
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      message: "Не удалось зарегистрироваться",
-    });
-  }
+app.post("/upload", checkAuth, upload.single("image"), (req, res) => {
+  res.json({
+    url: `/uploads/${req.file.originalname}`,
+  });
 });
 
-app.get("/auth/me", checkAuth, async (req, res) => {
-  try {
-    const user = await UserModal.findById(req.userId);
+app.get("/tags", PostController.getLastTags);
 
-    if (!user) {
-      return res.status(404).json({
-        message: "Пользователь не найден",
-      });
-    }
-    const { passwordHash, ...userData } = user._doc;
+app.get("/posts", PostController.getAll);
+app.get("/posts/tags", PostController.getLastTags);
+app.get("/posts/:id", PostController.getOne);
+app.post(
+  "/posts",
+  checkAuth,
+  postCreateValidation,
+  handleValidationErrors,
+  PostController.create
+);
+app.delete("/posts/:id", checkAuth, PostController.remove);
+app.patch(
+  "/posts/:id",
+  checkAuth,
+  postCreateValidation,
+  handleValidationErrors,
+  PostController.update
+);
 
-    res.json({ userData });
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      message: "Нет доступа",
-    });
-  }
-});
-
-app.listen(4444, (err) => {
+app.listen(process.env.PORT || 4444, (err) => {
   if (err) {
     return console.log(err);
   }
-  console.log("server OK");
+
+  console.log("Server OK");
 });
